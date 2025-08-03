@@ -3676,3 +3676,25 @@ class AnnotationGuideWriteSerializer(WriteOnceMixin, serializers.ModelSerializer
     class Meta:
         model = models.AnnotationGuide
         fields = ('id', 'task_id', 'project_id', 'markdown', )
+
+class SensorMetadataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.SensorMetadata
+        fields = [
+            'id', 'sensor_name', 'sensor_type', 'modality',
+            'intrinsic_matrix', 'extrinsic_matrix', 'distortion_coefficients',
+            'resolution', 'field_of_view', 'frequency', 'timestamp_offset',
+            'additional_metadata', 'created_date', 'updated_date'
+        ]
+        read_only_fields = ['id', 'created_date', 'updated_date']
+
+
+class EgoPoseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.EgoPose
+        fields = [
+            'id', 'frame_id', 'translation', 'rotation', 'timestamp',
+            'coordinate_system', 'pose_source', 'pose_confidence',
+            'created_date', 'updated_date'
+        ]
+        read_only_fields = ['id', 'created_date', 'updated_date']

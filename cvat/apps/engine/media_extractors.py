@@ -1327,3 +1327,237 @@ class ValidateDimension:
 
         if len(self.related_files.keys()):
             self.dimension = DimensionType.DIM_3D
+
+class SensorMetadataExtractor:
+    """Helper class to extract and handle sensor metadata from various dataset formats"""
+
+    def __init__(self, source_path, dataset_format=None):
+        self.source_path = source_path
+        self.dataset_format = dataset_format
+        self.sensor_metadata = {}
+        self.ego_poses = {}
+
+    def extract_metadata(self):
+        """Extract metadata based on detected format"""
+        if self.dataset_format == 'nuscenes':
+            return self._extract_nuscenes_metadata()
+        elif self.dataset_format == 'kitti':
+            return self._extract_kitti_metadata()
+        else:
+            return self._extract_generic_metadata()
+
+    def _extract_nuscenes_metadata(self):
+        """Extract nuScenes sensor metadata"""
+        try:
+            import json
+
+            # Load nuScenes metadata files
+            metadata_dir = self.source_path
+
+            sensors = {}
+            calibrated_sensors = {}
+            ego_poses = {}
+            sample_data = {}
+
+            # Load sensor definitions
+            sensor_file = os.path.join(metadata_dir, 'sensor.json')
+            if os.path.exists(sensor_file):
+                with open(sensor_file, 'r') as f:
+                    for sensor in json.load(f):
+                        sensors[sensor['token']] = sensor
+
+            # Load calibrated sensors
+            cal_sensor_file = os.path.join(metadata_dir, 'calibrated_sensor.json')
+            if os.path.exists(cal_sensor_file):
+                with open(cal_sensor_file, 'r') as f:
+                    for cal_sensor in json.load(f):
+                        calibrated_sensors[cal_sensor['token']] = cal_sensor
+
+            # Load ego poses
+            ego_pose_file = os.path.join(metadata_dir, 'ego_pose.json')
+            if os.path.exists(ego_pose_file):
+                with open(ego_pose_file, 'r') as f:
+                    for ego_pose in json.load(f):
+                        ego_poses[ego_pose['token']] = ego_pose
+
+            # Load sample data
+            sample_data_file = os.path.join(metadata_dir, 'sample_data.json')
+            if os.path.exists(sample_data_file):
+                with open(sample_data_file, 'r') as f:
+                    for data in json.load(f):
+                        sample_data[data['token']] = data
+
+            # Process and structure the metadata
+            for token, data in sample_data.items():
+                cal_sensor_token = data.get('calibrated_sensor_token')
+                ego_pose_token = data.get('ego_pose_token')
+
+                if cal_sensor_token in calibrated_sensors:
+                    cal_sensor = calibrated_sensors[cal_sensor_token]
+                    sensor_token = cal_sensor.get('sensor_token')
+
+                    if sensor_token in sensors:
+                        sensor = sensors[sensor_token]
+
+                        self.sensor_metadata[data['filename']] = {
+                            'sensor_name': sensor['channel'],
+                            'sensor_type': self._map_nuscenes_modality(sensor['modality']),
+                            'modality': sensor['modality'],
+                            'intrinsic_matrix': cal_sensor.get('camera_intrinsic'),
+                            'extrinsic_matrix': {
+                                'translation': cal_sensor.get('translation'),
+                                'rotation': cal_sensor.get('rotation')
+                            },
+                            'timestamp': data.get('timestamp'),
+                            'additional_metadata': {
+                                'channel': sensor['channel'],
+                                'fileformat': data.get('fileformat'),
+                                'width': data.get('width'),
+                                'height': data.get('height'),
+                            }
+                        }
+
+                if ego_pose_token in ego_poses:
+                    ego_pose = ego_poses[ego_pose_token]
+                    self.ego_poses[data['filename']] = {
+                        'translation': ego_pose.get('translation'),
+                        'rotation': ego_pose.get('rotation'),
+                        'timestamp': ego_pose.get('timestamp'),
+                        'pose_source': 'gps_imu'
+                    }
+
+            return True
+
+        except Exception as e:
+            print(f"Error extracting nuScenes metadata: {e}")
+            return False
+
+    def _extract_kitti_metadata(self):
+        """Extract KITTI sensor metadata"""
+        try:
+            calibration_dir = self.source_path
+
+            # Parse KITTI calibration files
+            calib_files = {
+                'cam_to_cam': 'calib_cam_to_cam.txt',
+                'imu_to_velo': 'calib_imu_to_velo.txt',
+                'velo_to_cam': 'calib_velo_to_cam.txt'
+            }
+
+            calibration_data = {}
+            for calib_type, filename in calib_files.items():
+                filepath = os.path.join(calibration_dir, filename)
+                if os.path.exists(filepath):
+                    calibration_data[calib_type] = self._parse_kitti_calib_file(filepath)
+
+            # Load timestamps if available
+            timestamps = []
+            timestamp_file = os.path.join(calibration_dir, 'timestamps.txt')
+            if os.path.exists(timestamp_file):
+                with open(timestamp_file, 'r') as f:
+                    timestamps = [line.strip() for line in f]
+
+            # Create sensor metadata for each detected sensor type
+            # Camera sensors
+            if 'cam_to_cam' in calibration_data:
+                cam_data = calibration_data['cam_to_cam']
+                for i in range(4):  # KITTI typically has 4 cameras
+                    cam_key = f'image_{i:02d}'
+                    if f'K_{i:02d}' in cam_data:  # Check if camera exists
+                        self.sensor_metadata[cam_key] = {
+                            'sensor_name': f'camera_{i:02d}',
+                            'sensor_type': 'camera',
+                            'modality': 'rgb',
+                            'intrinsic_matrix': cam_data.get(f'K_{i:02d}'),
+                            'extrinsic_matrix': {
+                                'translation': cam_data.get(f'T_{i:02d}', [0, 0, 0]),
+                                'rotation': [1, 0, 0, 0]  # Default identity quaternion
+                            },
+                            'resolution': [cam_data.get(f'S_{i:02d}', [1242, 375])[0], cam_data.get(f'S_{i:02d}', [1242, 375])[1]],
+                            'additional_metadata': {
+                                'distortion': cam_data.get(f'D_{i:02d}'),
+                                'rectification': cam_data.get(f'R_{i:02d}'),
+                                'projection': cam_data.get(f'P_{i:02d}')
+                            }
+                        }
+
+            # Velodyne LiDAR sensor
+            if 'velo_to_cam' in calibration_data:
+                velo_data = calibration_data['velo_to_cam']
+                self.sensor_metadata['velodyne_points'] = {
+                    'sensor_name': 'velodyne',
+                    'sensor_type': 'lidar',
+                    'modality': 'lidar',
+                    'extrinsic_matrix': {
+                        'translation': velo_data.get('T', [0, 0, 0]),
+                        'rotation': velo_data.get('R', [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+                    },
+                    'additional_metadata': {
+                        'velodyne_to_cam_transform': velo_data
+                    }
+                }
+
+            return True
+
+        except Exception as e:
+            print(f"Error extracting KITTI metadata: {e}")
+            return False
+
+    def _extract_generic_metadata(self):
+        """Extract generic metadata from file structure"""
+        try:
+            # For generic datasets, try to infer sensor types from file extensions
+            for root, dirs, files in os.walk(self.source_path):
+                for file in files:
+                    filepath = os.path.join(root, file)
+                    filename = os.path.basename(file)
+                    ext = os.path.splitext(filename)[1].lower()
+
+                    if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']:
+                        self.sensor_metadata[filename] = {
+                            'sensor_name': 'camera',
+                            'sensor_type': 'camera',
+                            'modality': 'rgb'
+                        }
+                    elif ext in ['.bin', '.pcd', '.ply']:
+                        self.sensor_metadata[filename] = {
+                            'sensor_name': 'lidar',
+                            'sensor_type': 'lidar',
+                            'modality': 'lidar'
+                        }
+
+            return True
+
+        except Exception as e:
+            print(f"Error extracting generic metadata: {e}")
+            return False
+
+    def _map_nuscenes_modality(self, modality):
+        """Map nuScenes modality to CVAT sensor type"""
+        mapping = {
+            'camera': 'camera',
+            'lidar': 'lidar',
+            'radar': 'radar'
+        }
+        return mapping.get(modality, modality)
+
+    def _parse_kitti_calib_file(self, filepath):
+        """Parse KITTI calibration file"""
+        calib_data = {}
+        try:
+            with open(filepath, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if ':' in line:
+                        key, values = line.split(':', 1)
+                        key = key.strip()
+                        try:
+                            # Try to parse as numbers
+                            values = [float(x) for x in values.strip().split()]
+                            calib_data[key] = values
+                        except ValueError:
+                            # Keep as string if not numerical
+                            calib_data[key] = values.strip()
+        except Exception as e:
+            print(f"Error parsing KITTI calibration file {filepath}: {e}")
+        return calib_data

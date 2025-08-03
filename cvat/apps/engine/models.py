@@ -1402,3 +1402,107 @@ class RequestSubresource(TextChoices):
     ANNOTATIONS = "annotations"
     DATASET = "dataset"
     BACKUP = "backup"
+
+class SensorMetadata(models.Model):
+    """Model to store sensor metadata and calibration information"""
+
+    # Link to the data this metadata belongs to
+    data = models.ForeignKey(Data, on_delete=models.CASCADE, related_name='sensor_metadata')
+
+    # Sensor identification
+    sensor_name = models.CharField(max_length=100, help_text="Name/identifier of the sensor")
+    sensor_type = models.CharField(
+        max_length=50,
+        choices=[
+            ('camera', 'Camera'),
+            ('lidar', 'LiDAR'),
+            ('radar', 'Radar'),
+            ('imu', 'IMU'),
+            ('gps', 'GPS'),
+        ],
+        help_text="Type of sensor"
+    )
+    modality = models.CharField(max_length=50, blank=True, help_text="Sensor modality (e.g., rgb, depth, etc.)")
+
+    # Calibration data stored as JSON
+    intrinsic_matrix = models.JSONField(null=True, blank=True, help_text="Camera intrinsic matrix")
+    extrinsic_matrix = models.JSONField(null=True, blank=True, help_text="Sensor extrinsic matrix (pose relative to ego)")
+    distortion_coefficients = models.JSONField(null=True, blank=True, help_text="Camera distortion coefficients")
+
+    # Additional sensor-specific parameters
+    resolution = models.JSONField(null=True, blank=True, help_text="Sensor resolution [width, height]")
+    field_of_view = models.JSONField(null=True, blank=True, help_text="Field of view parameters")
+    frequency = models.FloatField(null=True, blank=True, help_text="Sensor capture frequency in Hz")
+
+    # Timestamps and synchronization
+    timestamp_offset = models.FloatField(default=0.0, help_text="Timestamp offset relative to master clock")
+
+    # Additional metadata as flexible JSON field
+    additional_metadata = models.JSONField(null=True, blank=True, help_text="Additional sensor-specific metadata")
+
+    # Timestamps
+    created_date = models.DateTimeField(auto_now_add=True)
+    updated_date = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['data', 'sensor_name']
+        indexes = [
+            models.Index(fields=['data', 'sensor_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.sensor_name} ({self.sensor_type}) for Data {self.data_id}"
+
+
+class EgoPose(models.Model):
+    """Model to store ego vehicle poses for 3D data"""
+
+    # Link to the data this pose belongs to
+    data = models.ForeignKey(Data, on_delete=models.CASCADE, related_name='ego_poses')
+
+    # Frame identifier
+    frame_id = models.PositiveIntegerField(help_text="Frame number this pose corresponds to")
+
+    # Pose information in global coordinates
+    translation = models.JSONField(help_text="3D translation [x, y, z] in global coordinates")
+    rotation = models.JSONField(help_text="Rotation quaternion [w, x, y, z] in global coordinates")
+
+    # Timestamp
+    timestamp = models.BigIntegerField(null=True, blank=True, help_text="Timestamp in microseconds")
+
+    # Additional pose metadata
+    coordinate_system = models.CharField(
+        max_length=50,
+        default='global',
+        help_text="Coordinate system reference frame"
+    )
+    pose_source = models.CharField(
+        max_length=50,
+        choices=[
+            ('gps_imu', 'GPS+IMU'),
+            ('slam', 'SLAM'),
+            ('motion_capture', 'Motion Capture'),
+            ('manual', 'Manual'),
+            ('other', 'Other'),
+        ],
+        default='other',
+        help_text="Source of pose estimation"
+    )
+
+    # Quality indicators
+    pose_confidence = models.FloatField(null=True, blank=True, help_text="Pose confidence score [0-1]")
+
+    # Timestamps
+    created_date = models.DateTimeField(auto_now_add=True)
+    updated_date = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['data', 'frame_id']
+        indexes = [
+            models.Index(fields=['data', 'frame_id']),
+            models.Index(fields=['data', 'timestamp']),
+        ]
+        ordering = ['frame_id']
+
+    def __str__(self):
+        return f"EgoPose frame {self.frame_id} for Data {self.data_id}"

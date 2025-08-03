@@ -1481,6 +1481,54 @@ class TaskViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
         response_serializer = TaskValidationLayoutReadSerializer(validation_layout)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
+    @extend_schema(methods=['GET'], summary='Get sensor metadata for a task',
+        responses={
+            '200': SensorMetadataSerializer(many=True),
+        })
+    @action(detail=True, methods=['GET'], serializer_class=SensorMetadataSerializer,
+        url_path='sensor-metadata')
+    def sensor_metadata(self, request: ExtendedRequest, pk: int):
+        """Get sensor metadata for the task"""
+        self.get_object()  # force call of check_object_permissions()
+        db_task = models.Task.objects.prefetch_related('data__sensor_metadata').get(pk=pk)
+
+        sensor_metadata = models.SensorMetadata.objects.filter(data=db_task.data)
+        serializer = SensorMetadataSerializer(sensor_metadata, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(methods=['GET'], summary='Get ego poses for a task',
+        parameters=[
+            OpenApiParameter('frame_id', location=OpenApiParameter.QUERY,
+                required=False, type=OpenApiTypes.INT,
+                description="Frame ID to get ego pose for"),
+        ],
+        responses={
+            '200': EgoPoseSerializer(many=True),
+        })
+    @action(detail=True, methods=['GET'], serializer_class=EgoPoseSerializer,
+        url_path='ego-poses')
+    def ego_poses(self, request: ExtendedRequest, pk: int):
+        """Get ego poses for the task"""
+        self.get_object()  # force call of check_object_permissions()
+        db_task = models.Task.objects.prefetch_related('data__ego_poses').get(pk=pk)
+
+        ego_poses = models.EgoPose.objects.filter(data=db_task.data)
+
+        # Filter by frame_id if provided
+        frame_id = request.query_params.get('frame_id')
+        if frame_id is not None:
+            try:
+                frame_id = int(frame_id)
+                ego_poses = ego_poses.filter(frame_id=frame_id)
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid frame_id parameter'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        ego_poses = ego_poses.order_by('frame_id')
+        serializer = EgoPoseSerializer(ego_poses, many=True)
+        return Response(serializer.data)
 
 @extend_schema(tags=['jobs'])
 @extend_schema_view(
@@ -1544,7 +1592,7 @@ class TaskViewSet(viewsets.GenericViewSet, mixins.ListModelMixin,
         }),
     destroy=extend_schema(
         summary='Delete a job',
-        description=textwrap.dedent("""\
+        description=textwrap.dedent("""
             Related annotations will be deleted as well.
 
             Please note, that not every job can be removed. Currently,
